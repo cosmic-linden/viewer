@@ -110,6 +110,7 @@ LLUICtrl::LLUICtrl(const LLUICtrl::Params& p, const LLViewModelPtr& viewmodel)
 	mDisabledControlVariable(NULL),
 	mMakeVisibleControlVariable(NULL),
 	mMakeInvisibleControlVariable(NULL),
+    mValueSignal(NULL),
 	mCommitSignal(NULL),
 	mValidateSignal(NULL),
 	mMouseEnterSignal(NULL),
@@ -250,6 +251,7 @@ LLUICtrl::~LLUICtrl()
 		gFocusMgr.removeTopCtrlWithoutCallback( this );
 	}
 
+    delete mValueSignal;
 	delete mCommitSignal;
 	delete mValidateSignal;
 	delete mMouseEnterSignal;
@@ -438,6 +440,15 @@ void LLUICtrl::onCommit()
 	}
 }
 
+// virtual
+void LLUICtrl::onValue()
+{
+    if (mValueSignal)
+    {
+        (*mValueSignal)(this, getValue(), getTentative());
+    }
+}
+
 //virtual
 BOOL LLUICtrl::isCtrl() const
 {
@@ -448,6 +459,7 @@ BOOL LLUICtrl::isCtrl() const
 void LLUICtrl::setValue(const LLSD& value)
 {
     mViewModel->setValue(value);
+    onValue();
 }
 
 //virtual
@@ -1053,6 +1065,13 @@ void LLUICtrl::setTransparencyType(ETypeTransparency type)
 	mTransparencyType = type;
 }
 
+boost::signals2::connection LLUICtrl::setValueCallback( const value_signal_t::slot_type& cb ) 
+{ 
+    if (!mValueSignal) mValueSignal = new value_signal_t();
+
+	return mValueSignal->connect(cb);
+}
+
 boost::signals2::connection LLUICtrl::setCommitCallback(const CommitCallbackParam& cb)
 {
 	return setCommitCallback(initCommitCallback(cb));
@@ -1124,6 +1143,41 @@ boost::signals2::connection LLUICtrl::setDoubleClickCallback( const mouse_signal
 	if (!mDoubleClickSignal) mDoubleClickSignal = new mouse_signal_t();
 
 	return mDoubleClickSignal->connect(cb); 
+}
+
+void LLUICtrl::propagateCommits(LLUICtrl* receiver)
+{
+    // *HACK: Add a dummy callback to check that the receiver is not destroyed
+    // yet, with the dual-purpose of bookeeping to prevent infinite recursion.
+    boost::signals2::connection dummy_connection = receiver->setCommitCallback([](LLUICtrl* ctrl, const LLSD& param) {});
+
+    // TODO: This is working fine (better than expected, in fact), however, I need to leave these debug prints in here for now to help with reproducibility of a memory bug
+    setValueCallback([=](LLUICtrl* ctrl, const LLSD& param, bool tentative)
+    {
+        LL_WARNS() << "on value: " << ctrl->getName() << LL_ENDL; // TODO: Remove
+        if (!dummy_connection.connected() || dummy_connection.blocked())
+        {
+            return;
+        }
+        LL_WARNS() << "on value: " << ctrl->getName() << ": connected/not blocked" << LL_ENDL; // TODO: Remove
+        boost::signals2::shared_connection_block block(dummy_connection);
+        // Emulate value set and commit
+        receiver->setValue(param);
+        receiver->setTentative(tentative);
+        receiver->onValue();
+    });
+    setCommitCallback([=](LLUICtrl* ctrl, const LLSD& param)
+    {
+        LL_WARNS() << "on commit: " << ctrl->getName() << LL_ENDL; // TODO: Remove
+        if (!dummy_connection.connected() || dummy_connection.blocked())
+        {
+            return;
+        }
+        LL_WARNS() << "on commit: " << ctrl->getName() << ": connected/not blocked" << LL_ENDL; // TODO: Remove
+        boost::signals2::shared_connection_block block(dummy_connection);
+        // Emulate value set and commit
+        receiver->onCommit();
+    });
 }
 
 void LLUICtrl::addInfo(LLSD & info)
