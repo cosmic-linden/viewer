@@ -569,6 +569,7 @@ void LLFloaterTools::draw()
 
     if (mDirty)
 	{
+        if (mDirty != 1) { LL_WARNS() << "mDirty: " << mDirty << LL_ENDL; } // TODO: Remove
 		refresh();
 		mDirty = FALSE;
 	}
@@ -579,6 +580,7 @@ void LLFloaterTools::draw()
 
 void LLFloaterTools::dirty()
 {
+    LL_WARNS() << __FUNCTION__ << LL_ENDL; // TODO: Remove
 	mDirty = TRUE; 
 	LLFloaterOpenObject* instance = LLFloaterReg::findTypedInstance<LLFloaterOpenObject>("openobject");
 	if (instance) instance->dirty();

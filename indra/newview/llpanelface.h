@@ -29,6 +29,7 @@
 
 #include "v4color.h"
 #include "llpanel.h"
+#include "llgltfmaterial.h"
 #include "llmaterial.h"
 #include "llmaterialmgr.h"
 #include "lltextureentry.h"
@@ -102,7 +103,8 @@ public:
     void			refreshMedia();
     void			unloadMedia();
 
-    static void onGLTFMaterialUpdate(const LLUUID& object_id, S32 side);
+    static void onSelectionChanged();
+    static void onMaterialOverrideReceived(const LLUUID& object_id, S32 side);
 
     /*virtual*/ void draw();
 
@@ -176,7 +178,6 @@ protected:
 	//
 	// @param force_set_values forces spinners to set value even if they are focused
 	void updateUI(bool force_set_values = false);
-    void updateUIGLTF(LLViewerObject* objectp, bool& has_pbr_material, bool force_set_values);
 
 	// Convenience func to determine if all faces in selection have
 	// identical planar texgen settings during edits
@@ -291,7 +292,6 @@ private:
 	// Do NOT call updateUI from within this function.
 	//
 	void updateVisibility();
-    void updateVisibilityGLTF();
 
 	// Hey look everyone, a type-safe alternative to copy and paste! :)
 	//
@@ -451,28 +451,25 @@ private:
     void onTextureSelectionChanged(LLInventoryItem* itemp);
     void onPbrSelectionChanged(LLInventoryItem* itemp);
 
+    void updateUIGLTF(LLViewerObject* objectp, bool& has_pbr_material, bool force_set_values);
+    void updateVisibilityGLTF();
+
+    void updateSelectedGLTFMaterials(std::function<void(LLGLTFMaterial*)> func);
+    void updateGLTFTextureTransform(float value, U32 pbr_type, std::function<void(LLGLTFMaterial::TextureTransform*)> edit);
+
     LLMenuButton*   mMenuClipboardColor;
     LLMenuButton*   mMenuClipboardTexture;
 
 	bool mIsAlpha;
 	
-	/* These variables interlock processing of materials updates sent to
-	 * the sim.  mUpdateInFlight is set to flag that an update has been
-	 * sent to the sim and not acknowledged yet, and cleared when an
-	 * update is received from the sim.  mUpdatePending is set when
-	 * there's an update in flight and another UI change has been made
-	 * that needs to be sent as a materials update, and cleared when the
-	 * update is sent.  This prevents the sim from getting spammed with
-	 * update messages when, for example, the user holds down the
-	 * up-arrow on a spinner, and avoids running afoul of its throttle.
-	 */
-	bool mUpdateInFlight;
-    bool mUpdatePending;
-
     LLSD            mClipboardParams;
 
     LLSD mMediaSettings;
     bool mNeedMediaTitle;
+
+    static bool sMaterialOverrideChanged;
+    static LLUUID sMaterialOverrideObjectPending;
+    static S32 sMaterialOverrideFacePending;
 
 public:
 	#if defined(DEF_GET_MAT_STATE)

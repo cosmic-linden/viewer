@@ -114,6 +114,10 @@ const S32 PBRTYPE_NORMAL = 2;       // PBR Normal
 const S32 PBRTYPE_METALLIC_ROUGHNESS = 3; // PBR Metallic
 const S32 PBRTYPE_EMISSIVE = 4;     // PBR Emissive
 
+bool LLPanelFace::sMaterialOverrideChanged = true;
+LLUUID LLPanelFace::sMaterialOverrideObjectPending = LLUUID::null;
+S32 LLPanelFace::sMaterialOverrideFacePending = -1;
+
 LLGLTFMaterial::TextureInfo texture_info_from_pbrtype(S32 pbr_type)
 {
     switch (pbr_type)
@@ -136,7 +140,7 @@ LLGLTFMaterial::TextureInfo texture_info_from_pbrtype(S32 pbr_type)
     }
 }
 
-void updateSelectedGLTFMaterials(std::function<void(LLGLTFMaterial*)> func)
+void LLPanelFace::updateSelectedGLTFMaterials(std::function<void(LLGLTFMaterial*)> func)
 {
     struct LLSelectedTEGLTFMaterialFunctor : public LLSelectedTEFunctor
     {
@@ -158,7 +162,16 @@ void updateSelectedGLTFMaterials(std::function<void(LLGLTFMaterial*)> func)
 
 		std::function<void(LLGLTFMaterial*)> mFunc;
     } select_func(func);
+
     LLSelectMgr::getInstance()->getSelection()->applyToTEs(&select_func);
+
+    LLSelectNode* node = LLSelectMgr::getInstance()->getSelection()->getFirstNode();
+    if (node)
+    {
+        LLViewerObject* object = node->getObject();
+        sMaterialOverrideObjectPending = object->getID();
+        sMaterialOverrideFacePending = node->getLastSelectedTE();
+    }
 }
 
 template<typename T>
@@ -277,6 +290,9 @@ BOOL	LLPanelFace::postBuild()
     childSetCommitCallback("gltfTextureRotation", boost::bind(&LLPanelFace::onCommitGLTFRotation, this, _1), nullptr);
     childSetCommitCallback("gltfTextureOffsetU", boost::bind(&LLPanelFace::onCommitGLTFTextureOffsetU, this, _1), nullptr);
     childSetCommitCallback("gltfTextureOffsetV", boost::bind(&LLPanelFace::onCommitGLTFTextureOffsetV, this, _1), nullptr);
+
+    LLSelectMgr::instance().mUpdateSignal.connect(&LLPanelFace::onSelectionChanged);
+    LLGLTFMaterialList::addUpdateCallback(&LLPanelFace::onMaterialOverrideReceived);
 
 	childSetAction("button align",&LLPanelFace::onClickAutoFix,this);
 	childSetAction("button align textures", &LLPanelFace::onAlignTexture, this);
@@ -1805,7 +1821,7 @@ void LLPanelFace::updateUIGLTF(LLViewerObject* objectp, bool& has_pbr_material, 
 {
     has_pbr_material = false;
 
-    BOOL editable = objectp->permModify() && !objectp->isPermanentEnforced();
+    const bool editable = objectp->permModify() && !objectp->isPermanentEnforced();
 
     // pbr material
     LLTextureCtrl* pbr_ctrl = findChild<LLTextureCtrl>("pbr_control");
@@ -1815,11 +1831,13 @@ void LLPanelFace::updateUIGLTF(LLViewerObject* objectp, bool& has_pbr_material, 
         bool identical_pbr;
         LLSelectedTE::getPbrMaterialId(pbr_id, identical_pbr);
 
+        has_pbr_material = pbr_id.notNull();
+
         pbr_ctrl->setTentative(identical_pbr ? FALSE : TRUE);
         pbr_ctrl->setEnabled(editable);
         pbr_ctrl->setImageAssetID(pbr_id);
-        has_pbr_material = pbr_id.notNull();
     }
+
     getChildView("pbr_from_inventory")->setEnabled(editable);
     getChildView("edit_selected_pbr")->setEnabled(editable && has_pbr_material);
     getChildView("save_selected_pbr")->setEnabled(objectp->permCopy() && has_pbr_material);
@@ -1839,8 +1857,8 @@ void LLPanelFace::updateUIGLTF(LLViewerObject* objectp, bool& has_pbr_material, 
     if (show_pbr)
     {
         LLUICtrl* gltfCtrlTextureScaleU = getChild<LLUICtrl>("gltfTextureScaleU");
-		LLUICtrl* gltfCtrlTextureScaleV = getChild<LLUICtrl>("gltfTextureScaleV");
-		LLUICtrl* gltfCtrlTextureRotation = getChild<LLUICtrl>("gltfTextureRotation");
+        LLUICtrl* gltfCtrlTextureScaleV = getChild<LLUICtrl>("gltfTextureScaleV");
+        LLUICtrl* gltfCtrlTextureRotation = getChild<LLUICtrl>("gltfTextureRotation");
         LLUICtrl* gltfCtrlTextureOffsetU = getChild<LLUICtrl>("gltfTextureOffsetU");
         LLUICtrl* gltfCtrlTextureOffsetV = getChild<LLUICtrl>("gltfTextureOffsetV");
 
@@ -1852,6 +1870,16 @@ void LLPanelFace::updateUIGLTF(LLViewerObject* objectp, bool& has_pbr_material, 
 
         if (show_texture_info)
         {
+
+            // TODO: Why isn't this working?
+            // TODO: Test this new thing works, then clean up. A PR is worth it just to fix the flickering.
+            // TODO: After rebasing, replace this return statement with a more robust wrapping clause
+            if (!sMaterialOverrideChanged)
+            {
+                return;
+            }
+            sMaterialOverrideChanged = false;
+
             LLGLTFMaterial::TextureTransform transform;
             bool scale_u_same = true;
             bool scale_v_same = true;
@@ -1885,7 +1913,7 @@ void LLPanelFace::updateUIGLTF(LLViewerObject* objectp, bool& has_pbr_material, 
             //gltfCtrlTextureScaleV->setValue(transform.mScale[VY]);
             gltfCtrlTextureRotation->setValue(transform.mRotation * RAD_TO_DEG);
             gltfCtrlTextureOffsetU->setValue(transform.mOffset[VX]);
-			gltfCtrlTextureOffsetV->setValue(transform.mOffset[VY]);
+            gltfCtrlTextureOffsetV->setValue(transform.mOffset[VY]);
 
             gltfCtrlTextureScaleU->setTentative(!scale_u_same);
             gltfCtrlTextureScaleV->setTentative(!scale_v_same);
@@ -2121,6 +2149,28 @@ void LLPanelFace::unloadMedia()
     // destroy media source used to grab media title
     if (mTitleMedia)
         mTitleMedia->unloadMediaSource();
+}
+
+// static
+void LLPanelFace::onSelectionChanged()
+{
+    if (sMaterialOverrideObjectPending.isNull())
+    {
+        LL_WARNS() << "setting flag" << LL_ENDL; // TODO: Remove
+        sMaterialOverrideChanged = true;
+    }
+}
+
+// static
+void LLPanelFace::onMaterialOverrideReceived(const LLUUID& object_id, S32 side)
+{
+    if (!sMaterialOverrideObjectPending.isNull() && object_id == sMaterialOverrideObjectPending && side == sMaterialOverrideFacePending)
+    {
+        sMaterialOverrideObjectPending = LLUUID::null;
+        sMaterialOverrideFacePending = -1;
+        LL_WARNS() << "setting flag" << LL_ENDL; // TODO: Remove
+        sMaterialOverrideChanged = true;
+    }
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -4716,7 +4766,7 @@ void LLPanelFace::onCommitPlanarAlign(LLUICtrl* ctrl, void* userdata)
 	self->sendTextureInfo();
 }
 
-void updateGLTFTextureTransform(float value, U32 pbr_type, std::function<void(LLGLTFMaterial::TextureTransform*)> edit)
+void LLPanelFace::updateGLTFTextureTransform(float value, U32 pbr_type, std::function<void(LLGLTFMaterial::TextureTransform*)> edit)
 {
     U32 texture_info_start;
     U32 texture_info_end;
